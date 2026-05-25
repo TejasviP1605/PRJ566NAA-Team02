@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+out/
+dist/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Debug & tooling
+*.log
+npm-debug.log*
+.DS_Store
+tsconfig.tsbuildinfo
+.vercel
