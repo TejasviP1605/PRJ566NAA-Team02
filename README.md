@@ -4,7 +4,7 @@ Capstone project repository for PRJ566NAA (2026), maintained by Team 02.
 
 ## RentRight — Rental Management Platform
 
-A complete, production-quality frontend for managing shared households, rent, expenses, maintenance, and documents.
+A complete frontend for managing shared households, rent, expenses, maintenance, and documents.
 
 ---
 
@@ -34,11 +34,11 @@ These are available as quick-fill buttons on the login page.
 
 ## Tech Stack
 
-- **Next.js 14** (App Router) — file-based routing, layouts, server components
+- **Next.js 14** (App Router) — file-based routing, layouts, and pages
 - **TypeScript** — full type safety throughout
 - **Tailwind CSS** — utility-first styling with custom design tokens
 - **Zustand** — lightweight auth + UI state management (persisted)
-- **TanStack Query** — server state, caching, and mutations
+- **TanStack Query** — data fetching, caching, and mutations
 - **React Hook Form + Zod** — form handling with schema validation
 - **Framer Motion** — subtle, performant animations
 - **Recharts** — dashboard charts and data visualization
@@ -53,7 +53,7 @@ src/
 ├── app/
 │   ├── (auth)/            # Login, Register, Forgot/Reset Password
 │   │   └── layout.tsx     # Auth shell (dark gradient background)
-│   ├── (app)/             # Protected app routes
+│   ├── app/               # Protected app routes
 │   │   ├── layout.tsx     # App shell (sidebar + topbar)
 │   │   ├── dashboard/     # Role-aware dashboard routing
 │   │   ├── household/     # Household info + members
@@ -73,17 +73,10 @@ src/
 │   └── dashboard/         # Role-specific dashboard components
 │
 ├── data/
-│   └── mock.ts            # Realistic mock data for all entities
+│   └── mock.ts            # Sample data for development and demos
 │
 ├── lib/
-│   ├── api/               # Fake API service layer (ready for real backend)
-│   │   ├── auth.service.ts
-│   │   ├── household.service.ts
-│   │   ├── expense.service.ts
-│   │   ├── payment.service.ts
-│   │   ├── maintenance.service.ts
-│   │   ├── document.service.ts
-│   │   └── activity.service.ts
+│   ├── api/               # Data service layer (auth, household, expenses, etc.)
 │   ├── utils.ts           # Formatting helpers (currency, dates, initials)
 │   └── validations.ts     # Zod schemas for all forms
 │
@@ -106,48 +99,7 @@ src/
 - Sidebar navigation filters items by role
 - UI elements (edit/delete buttons, invite controls) conditionally render based on role checks
 
-### Mock API Layer
-Each service in `src/lib/api/` follows the same pattern:
-- Async functions that simulate network delay (`mockFetch`)
-- Return typed `ApiResponse<T>` objects
-- Easy to swap: just replace `mockFetch(data)` with `fetch('/api/...')`
-
-### Backend Integration Points
-To connect a real backend:
-1. Replace `mockFetch(data, delay)` calls in each `*.service.ts` with real `fetch()` or `axios` calls
-2. Update `authService.login()` to call your real `/api/auth/login` endpoint and store the JWT
-3. Add interceptors/middleware to attach the auth token from `useAuthStore` to all API calls
-4. Update `mockUsers` / `mockHousehold` etc. with real API responses (or remove entirely)
-
 ### State Management
 - **Auth** → `useAuthStore` (Zustand, persisted to `localStorage`)
-- **Server state** → TanStack Query (all API calls, caching, invalidation)
-- **UI state** → `useUIStore` (Zustand, sidebar open, notifications)
-
----
-
-## Features Implemented
-
-✅ Authentication (Login, Register, Forgot/Reset Password)  
-✅ Role-based routing and navigation (4 roles)  
-✅ App shell with collapsible sidebar, topbar, mobile drawer  
-✅ Notification center  
-✅ Tenant Dashboard with charts and payment summary  
-✅ Leaseholder Dashboard with rent collection stats  
-✅ Property Manager Dashboard with maintenance overview  
-✅ Admin Dashboard with user management and system health  
-✅ Household management (create, view, lease progress)  
-✅ Member management (invite, roles, rent shares)  
-✅ Expense management (create, split rules, settle, delete)  
-✅ Payment tracking (mark paid, reminders, overdue)  
-✅ Maintenance requests (submit, timeline, status updates)  
-✅ Document management (upload, access control, download)  
-✅ Activity logs (filterable, grouped by date)  
-✅ Admin: User management table  
-✅ Admin: Audit logs  
-✅ Admin: Security & permissions panel  
-✅ Loading states, empty states, error states  
-✅ Toast notifications  
-✅ Responsive layout (mobile drawer)  
-✅ Framer Motion animations  
-✅ Full TypeScript types  
+- **Data** → TanStack Query (fetching, caching, invalidation)
+- **UI** → `useUIStore` (Zustand, sidebar open, notifications)
