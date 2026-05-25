@@ -1,4 +1,8 @@
-# RentRight — Rental Management Platform
+# PRJ566NAA-Team02 — RentRight Frontend
+
+Capstone project repository for PRJ566NAA (2026), maintained by Team 02.
+
+## RentRight — Rental Management Platform
 
 A complete, production-quality frontend for managing shared households, rent, expenses, maintenance, and documents.
 
