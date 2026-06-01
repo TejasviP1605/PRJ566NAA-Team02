@@ -1,8 +1,9 @@
+import EmptyState from '../components/EmptyState'
+
 export default function Expenses() {
   return (
     <div>
-      <h1>Activity</h1>
-      <p>Expenses</p>
+      <EmptyState title="Expenses" message="Your expense items will appear here." />
     </div>
   )
 }
