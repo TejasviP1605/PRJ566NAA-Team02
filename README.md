@@ -84,5 +84,5 @@ RentRight/
 - **Blank page after changes?** → Hard refresh the browser (Cmd + Shift + R on Mac or Ctrl + Shift + R on Windows).
 - **Need to reset demo data?** → Click the ↺ icon in the header.
 
-## AI ussage
+## AI Usage
 This project was developed with the assistance of GitHub Copilot for code suggestions and productivity support. All generated code was reviewed, understood, and modified where necessary by the development team. We confirm that we fully understand the functionality and behavior of the implemented code and take responsibility for its correctness.
