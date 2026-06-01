@@ -1,8 +1,9 @@
+import EmptyState from '../components/EmptyState'
+
 export default function Documents() {
   return (
     <div>
-      <h1>Documents</h1>
-      <p>Documents will appear here.</p>
+      <EmptyState title="Documents" message="Uploaded documents will appear here." />
     </div>
   )
 }

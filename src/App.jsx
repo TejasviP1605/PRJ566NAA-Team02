@@ -8,10 +8,6 @@ import Dashboard from './pages/Dashboard'
 import Expenses from './pages/Expenses'
 import Maintenance from './pages/Maintenance'
 import Documents from './pages/Documents'
-
-
-
-
 import Activity from './pages/Activity'
 
 export default function App() {
@@ -24,9 +20,9 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
-            
-            
-            
+            <Route path="expenses" element={<Expenses />} />
+            <Route path="maintenance" element={<Maintenance />} />
+            <Route path="documents" element={<Documents />} />
             <Route path="activity" element={<Activity />} />
             <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
