@@ -1,8 +1,8 @@
-export default function Activity() {
+export default function Documents() {
   return (
     <div>
-      <h1>Activity</h1>
-      <p>Documents.</p>
+      <h1>Documents</h1>
+      <p>Documents will appear here.</p>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-export default function Activity() {
+export default function Expenses() {
   return (
     <div>
       <h1>Activity</h1>
