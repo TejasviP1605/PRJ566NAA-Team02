@@ -1,3 +1,4 @@
+
 import { useMemo, useState } from 'react'
 import { CheckCircle2, DollarSign, Pencil, Plus, Trash2, Users, X } from 'lucide-react'
 import { useApp } from '../context/AppContext'
