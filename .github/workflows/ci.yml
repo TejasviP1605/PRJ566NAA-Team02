@@ -26,4 +26,4 @@ jobs:
         run: chmod -R +x node_modules/.bin
 
       - name: Build project
-        run: npm run build
+  run: npx vite build  # ← change from "npm run build"
