@@ -1,4 +1,6 @@
-
+-- RentRight database schema (safe to re-run)
+-- New project: run this whole file once in Supabase SQL Editor.
+-- Database already exists: run from "Expense split type" through "Backfill splits" only.
 
 -- Types
 do $$ begin
