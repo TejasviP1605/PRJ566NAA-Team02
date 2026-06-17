@@ -1,4 +1,3 @@
-//documents page with upload form and list of uploaded documents with download and delete actions
 import { useState } from 'react'
 import { Download, FileText, Plus, Trash2, Upload } from 'lucide-react'
 import HouseholdGate from '../components/HouseholdGate'
