@@ -322,3 +322,11 @@ export default function Expenses() {
     </div>
   )
 }
+export default function Expenses() {
+  return (
+    <div>
+      <h1>Expenses</h1>
+      <p>Recent expenses will appear here.</p>
+    </div>
+  )
+}
