@@ -137,15 +137,12 @@ export default function Documents() {
             Store leases, bills, and receipts for your household in Supabase Storage.
           </p>
         </div>
-
         <UploadDocumentForm />
-
         {actionError && (
           <p className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
             {actionError}
           </p>
         )}
-
         <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <h2 className="font-semibold text-slate-900 px-5 py-4 border-b border-slate-100">
             Household files
