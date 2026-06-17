@@ -55,3 +55,8 @@ Dashboard       →  households, household_members in Supabase
 Open `supabase/schema.sql`, copy all SQL, paste into Supabase SQL Editor, and run. If the database already exists, run only from `-- Expense split type` through the end.
 
 See `supabase/schema.sql` for your database report.
+
+---
+## AI Assistance Disclosure
+AI tools (GitHub Copilot) were used occasionally for code suggestions 
+during development.
