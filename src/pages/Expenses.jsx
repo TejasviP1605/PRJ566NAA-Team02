@@ -62,9 +62,33 @@ function ExpenseActions({
   const others = (expense.splits ?? []).filter((split) => split.member_id !== currentMember.id)
 
   return (
-    <div>
-      <h1>Expenses</h1>
-      <p>Your expenses will appear here.</p>
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {mine.amount > 0 && (
+        <PaidButton
+          paid={mine.paid}
+          amount={mine.amount}
+          label="Mark my share paid"
+          disabled={markingKey === `${expense.id}-${currentMember.id}`}
+          onClick={(paid) => onMarkMember(expense.id, currentMember.id, paid)}
+        />
+      )}
+      {iPaidBill &&
+        others
+          .filter((split) => split.amount > 0)
+          .map((split) => (
+            <PaidButton
+              key={split.member_id}
+              paid={Boolean(split.paid)}
+              amount={split.amount}
+              label={
+                split.paid
+                  ? `Undo ${memberNameById[split.member_id]}`
+                  : `Mark ${memberNameById[split.member_id]} paid`
+              }
+              disabled={markingKey === `${expense.id}-${split.member_id}`}
+              onClick={(paid) => onMarkMember(expense.id, split.member_id, paid)}
+            />
+          ))}
     </div>
   )
 }
