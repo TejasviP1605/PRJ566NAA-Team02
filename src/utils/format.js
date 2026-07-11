@@ -12,3 +12,14 @@ export function formatDate(dateString) {
     day: 'numeric',
   })
 }
+
+export function formatDateTime(dateString) {
+  if (!dateString) return '—'
+  return new Date(dateString).toLocaleString('en-CA', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
