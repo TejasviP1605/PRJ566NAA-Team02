@@ -99,3 +99,4 @@ export function useExpenseSplitState(members, totalAmount, initialExpense = null
     total,
   }
 }
+
