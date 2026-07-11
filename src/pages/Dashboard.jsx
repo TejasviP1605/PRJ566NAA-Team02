@@ -6,7 +6,7 @@ import { formatMoney } from '../utils/format'
 import { computeHouseholdTotal, computeYouOwe, computeYourShare } from '../utils/splits'
 
 function CreateHouseholdForm({ title, description, onSuccess }) {
-  const { createHousehold, loading, dataError } = useApp()
+  const { createHousehold, loading } = useApp()
   const [name, setName] = useState('')
   const [unit, setUnit] = useState('')
   const [address, setAddress] = useState('')
@@ -18,17 +18,22 @@ function CreateHouseholdForm({ title, description, onSuccess }) {
     event.preventDefault()
     setSubmitting(true)
     setError('')
-    const result = await createHousehold({ name, unit, address, phone })
-    setSubmitting(false)
-    if (!result.ok) {
-      setError(result.message)
-      return
+    try {
+      const result = await createHousehold({ name, unit, address, phone })
+      if (!result.ok) {
+        setError(result.message || 'Could not create household.')
+        return
+      }
+      setName('')
+      setUnit('')
+      setAddress('')
+      setPhone('')
+      onSuccess?.()
+    } catch (err) {
+      setError(err.message || 'Could not create household.')
+    } finally {
+      setSubmitting(false)
     }
-    setName('')
-    setUnit('')
-    setAddress('')
-    setPhone('')
-    onSuccess?.()
   }
 
   return (
@@ -41,11 +46,6 @@ function CreateHouseholdForm({ title, description, onSuccess }) {
       )}
 
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
-        {dataError && (
-          <p className="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm px-3 py-2">
-            {dataError}
-          </p>
-        )}
         {error && (
           <p className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
             {error}
@@ -181,8 +181,14 @@ function AddMemberPanel() {
 }
 
 export default function Dashboard() {
-  const { members, expenses, hasHousehold, hasActiveHousehold, currentUser, currentMember } =
-    useApp()
+  const {
+    members,
+    expenses,
+    hasHousehold,
+    hasActiveHousehold,
+    currentUser,
+    currentMember,
+  } = useApp()
 
   const memberCount = members.length
 
