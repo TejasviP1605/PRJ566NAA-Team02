@@ -18,15 +18,15 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route element={<ProtectedRoute />}>
-            <Route path="/" element={<Layout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="expenses" element={<Expenses />} />
-            <Route path="maintenance" element={<Maintenance />} />
-            <Route path="documents" element={<Documents />} />
-            <Route path="activity" element={<Activity />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route element={<Layout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="expenses" element={<Expenses />} />
+              <Route path="maintenance" element={<Maintenance />} />
+              <Route path="documents" element={<Documents />} />
+              <Route path="activity" element={<Activity />} />
             </Route>
           </Route>
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </BrowserRouter>
     </AppProvider>

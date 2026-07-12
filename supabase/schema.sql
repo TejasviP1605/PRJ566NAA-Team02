@@ -1,8 +1,8 @@
-<<<<<<< Updated upstream
+-- RentRight database schema (safe to re-run)
+-- New project: run this whole file once in Supabase SQL Editor.
+-- WARNING: drop statements below wipe existing data — use only on fresh/dev DBs.
 
-=======
 drop trigger if exists on_auth_user_created on auth.users;
->>>>>>> Stashed changes
 
 drop table if exists public.activities cascade;
 drop table if exists public.maintenance_requests cascade;

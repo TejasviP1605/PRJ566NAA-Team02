@@ -1,33 +1,51 @@
-import { useState } from 'react'
-import { Building2, DollarSign, Plus, Users } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { DollarSign, Plus } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import StatCard from '../components/StatCard'
-import { formatMoney, getMemberShare } from '../utils/splits'
+import { formatMoney } from '../utils/format'
+import { computeHouseholdTotal, computeYouOwe, computeYourShare } from '../utils/splits'
 
-function CreateHouseholdPanel() {
-  const { currentUser, createHousehold } = useApp()
+function CreateHouseholdForm({ title, description, onSuccess }) {
+  const { createHousehold, loading } = useApp()
   const [name, setName] = useState('')
   const [unit, setUnit] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
-    const result = createHousehold({ name, unit, address, phone })
-    if (!result.ok) setError(result.message)
+    setSubmitting(true)
+    setError('')
+    try {
+      const result = await createHousehold({ name, unit, address, phone })
+      if (!result.ok) {
+        setError(result.message || 'Could not create household.')
+        return
+      }
+      setName('')
+      setUnit('')
+      setAddress('')
+      setPhone('')
+      onSuccess?.()
+    } catch (err) {
+      setError(err.message || 'Could not create household.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Create your household</h1>
-        <p className="text-slate-600 text-sm mt-1">
-          Hi {currentUser?.name}, you are not in a household yet. Create one before adding expenses, maintenance, or documents.
-        </p>
-      </div>
+    <div className="space-y-4">
+      {(title || description) && (
+        <div>
+          {title && <h2 className="text-lg font-semibold text-slate-900">{title}</h2>}
+          {description && <p className="text-slate-600 text-sm mt-1">{description}</p>}
+        </div>
+      )}
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4 max-w-2xl">
+      <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
         {error && (
           <p className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
             {error}
@@ -73,8 +91,12 @@ function CreateHouseholdPanel() {
             />
           </div>
         </div>
-        <button type="submit" className="bg-teal-700 hover:bg-teal-800 text-white font-medium px-4 py-2 rounded-lg text-sm">
-          Create Household
+        <button
+          type="submit"
+          disabled={submitting || loading}
+          className="bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white font-medium px-4 py-2 rounded-lg text-sm"
+        >
+          {loading ? 'Loading profile…' : submitting ? 'Creating…' : 'Create Household'}
         </button>
       </form>
     </div>
@@ -87,10 +109,14 @@ function AddMemberPanel() {
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [message, setMessage] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
-    const result = addMember({ name, email, phone })
+    setSubmitting(true)
+    setMessage('')
+    const result = await addMember({ name, email, phone })
+    setSubmitting(false)
     if (!result.ok) {
       setMessage(result.message)
       return
@@ -143,61 +169,112 @@ function AddMemberPanel() {
           />
         </div>
       </div>
-      <button type="submit" className="bg-teal-700 hover:bg-teal-800 text-white font-medium px-4 py-2 rounded-lg text-sm">
-        Add Member
+      <button
+        type="submit"
+        disabled={submitting}
+        className="bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white font-medium px-4 py-2 rounded-lg text-sm"
+      >
+        {submitting ? 'Adding…' : 'Add Member'}
       </button>
     </form>
   )
 }
 
 export default function Dashboard() {
-  const { members, expenses, currentMember, hasHousehold } = useApp()
+  const {
+    members,
+    expenses,
+    hasHousehold,
+    hasActiveHousehold,
+    currentUser,
+    currentMember,
+  } = useApp()
 
-  if (!hasHousehold) return <CreateHouseholdPanel />
+  const memberCount = members.length
 
-  const myOwed = expenses.reduce((sum, expense) => {
-    const share = getMemberShare(expense, currentMember?.id, members)
-    const paid = expense.paidBy?.includes(currentMember?.id)
-    return paid ? sum : sum + share
-  }, 0)
+  const youOwe = useMemo(
+    () => computeYouOwe(expenses, currentMember?.id, memberCount),
+    [expenses, currentMember?.id, memberCount]
+  )
+
+  const yourShare = useMemo(
+    () => computeYourShare(expenses, currentMember?.id, memberCount),
+    [expenses, currentMember?.id, memberCount]
+  )
+
+  const householdTotal = useMemo(() => computeHouseholdTotal(expenses), [expenses])
+
+  if (!hasHousehold) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
+          <p className="text-slate-600 text-sm mt-1">
+            Hi {currentUser?.name}, create your first household to get started.
+          </p>
+        </div>
+        <CreateHouseholdForm />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Household</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
         <p className="text-slate-600 text-sm mt-1">
           Manage your household, members, and shared details.
         </p>
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-4">
-        <StatCard
-          label="You owe"
-          value={formatMoney(myOwed)}
-          sub="Unpaid share total"
-          icon={DollarSign}
-        />
-        <StatCard
-          label="Members"
-          value={members.length}
-          sub="People splitting costs"
-          icon={Users}
-          accent="slate"
-        />
-      </div>
+      {hasActiveHousehold && (
+        <>
+          <div className="grid sm:grid-cols-3 gap-4">
+            <StatCard
+              label="You owe"
+              value={formatMoney(youOwe)}
+              sub="After shares you marked paid"
+              icon={DollarSign}
+              accent="amber"
+            />
+            <StatCard
+              label="Your share"
+              value={formatMoney(yourShare)}
+              sub="Your part of all expenses"
+              icon={DollarSign}
+            />
+            <StatCard
+              label="Household total"
+              value={formatMoney(householdTotal)}
+              sub={`${expenses.length} expense${expenses.length === 1 ? '' : 's'}`}
+              icon={DollarSign}
+            />
+          </div>
 
-      <AddMemberPanel />
+          <AddMemberPanel />
 
-      <section className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-        <h2 className="font-semibold text-slate-900 mb-3">Household Members</h2>
-        <ul className="grid sm:grid-cols-2 gap-3">
-          {members.map((member) => (
-            <li key={member.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-              <p className="font-medium text-slate-900">{member.name}</p>
-              <p className="text-slate-500">{member.email || 'No email'}{member.phone ? ` · ${member.phone}` : ''}</p>
-            </li>
-          ))}
-        </ul>
+          <section className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+            <h2 className="font-semibold text-slate-900 mb-3">Household Members</h2>
+            <ul className="grid sm:grid-cols-2 gap-3">
+              {members.map((member) => (
+                <li key={member.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                  <p className="font-medium text-slate-900">{member.name}</p>
+                  <p className="text-slate-500">
+                    {member.email || 'No email'}
+                    {member.phone ? ` · ${member.phone}` : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
+
+      <section className="border-t border-slate-200 pt-6">
+        <CreateHouseholdForm
+          title="Create another household"
+          description="You can belong to multiple households. Each one is managed separately."
+        />
       </section>
     </div>
   )

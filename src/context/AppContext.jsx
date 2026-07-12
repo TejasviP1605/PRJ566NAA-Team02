@@ -1,470 +1,1126 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { getInitialState } from '../data/sampleData'
-
-const STORAGE_KEY = 'rentright-app-data'
-const DEFAULT_HOUSEHOLD_ID = 'h1'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { validateSplitPayload } from '../utils/expenseSplits'
+import { resolveCurrentMember } from '../utils/splits'
 
 const AppContext = createContext(null)
 
-function today() {
-  return new Date().toISOString().slice(0, 10)
-}
+export const EXPENSE_CATEGORIES = [
+  { value: 'rent', label: 'Rent' },
+  { value: 'utilities', label: 'Utilities' },
+  { value: 'groceries', label: 'Groceries' },
+  { value: 'maintenance', label: 'Maintenance' },
+  { value: 'other', label: 'Other' },
+]
 
-function makeId(prefix) {
-  return `${prefix}${Date.now()}${Math.floor(Math.random() * 1000)}`
-}
+export const DOCUMENT_CATEGORIES = [
+  { value: 'lease', label: 'Lease' },
+  { value: 'bill', label: 'Bill' },
+  { value: 'receipt', label: 'Receipt' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'other', label: 'Other' },
+]
+
+export const MAINTENANCE_CATEGORIES = [
+  { value: 'plumbing', label: 'Plumbing' },
+  { value: 'electrical', label: 'Electrical' },
+  { value: 'appliance', label: 'Appliance' },
+  { value: 'hvac', label: 'HVAC' },
+  { value: 'structural', label: 'Structural' },
+  { value: 'other', label: 'Other' },
+]
+
+export const MAINTENANCE_PRIORITIES = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'urgent', label: 'Urgent' },
+]
+
+export const MAINTENANCE_STATUSES = [
+  { value: 'submitted', label: 'Submitted' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'cancelled', label: 'Cancelled' },
+]
+
+const DOCUMENT_BUCKET = 'household-documents'
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
 
-function legacyHouseholdIdForMember(member) {
-  // Older demo data stored everyone in one implicit household. Keep only the
-  // original seeded members there; newly registered legacy users should remain
-  // household-less until they create or join one.
-  return ['m1', 'm2', 'm3'].includes(member.id) ? DEFAULT_HOUSEHOLD_ID : null
+function authErrorMessage(error) {
+  const msg = error?.message ?? 'Something went wrong.'
+  if (/email not confirmed/i.test(msg)) {
+    return 'Email confirmation is required by your Supabase project. Turn off “Confirm email” under Authentication → Providers → Email, then try again.'
+  }
+  if (/invalid login credentials/i.test(msg)) {
+    return 'Invalid email or password.'
+  }
+  if (/rate limit|too many requests/i.test(msg)) {
+    return 'Too many attempts. Wait a few minutes and try again.'
+  }
+  if (/already registered|already been registered/i.test(msg)) {
+    return 'An account already exists for that email.'
+  }
+  return msg
 }
 
-function normalizeState(saved) {
-  const fresh = getInitialState()
-  if (!saved || typeof saved !== 'object') return fresh
+function profileFromAuthUser(user) {
+  const displayName =
+    user.user_metadata?.display_name?.trim() ||
+    user.email?.split('@')[0] ||
+    'User'
+  return {
+    displayName,
+    email: normalizeEmail(user.email ?? ''),
+  }
+}
 
-  const legacyHousehold = saved.household
-    ? [{ id: DEFAULT_HOUSEHOLD_ID, ...saved.household }]
-    : []
-  const households = saved.households?.length ? saved.households : legacyHousehold.length ? legacyHousehold : fresh.households
+async function ensureProfileRow(user) {
+  const { displayName, email } = profileFromAuthUser(user)
 
-  const members = (saved.members?.length ? saved.members : fresh.members).map((member) => ({
-    ...member,
-    householdId: member.householdId ?? legacyHouseholdIdForMember(member),
-    email: member.email || `${member.name.toLowerCase().replace(/\s+/g, '.')}@example.com`,
-    phone: member.phone || '',
-  }))
+  const { data, error } = await supabase
+    .from('profiles')
+    .upsert(
+      { id: user.id, display_name: displayName, email },
+      { onConflict: 'id' }
+    )
+    .select('id, display_name, email, active_household_id')
+    .single()
 
-  const accounts = (saved.accounts?.length ? saved.accounts : fresh.accounts).map((account) => {
-    const linkedMember = members.find((member) => member.id === account.memberId)
-    return {
-      ...account,
-      householdId: account.householdId ?? linkedMember?.householdId ?? null,
+  if (error) throw error
+  return data
+}
+
+async function replaceExpenseSplits(expenseId, splits) {
+  const { error: deleteError } = await supabase
+    .from('expense_splits')
+    .delete()
+    .eq('expense_id', expenseId)
+
+  if (deleteError) throw deleteError
+
+  if (!splits?.length) return
+
+  const { error: insertError } = await supabase.from('expense_splits').insert(
+    splits.map((row) => ({
+      expense_id: expenseId,
+      member_id: row.memberId,
+      amount: row.amount,
+      percentage: row.percentage,
+      paid: false,
+    }))
+  )
+
+  if (insertError) throw insertError
+}
+
+async function fetchHouseholdData(userId, authUser) {
+  let profile = null
+
+  const { data: profileRow, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, display_name, email, active_household_id')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (profileError) throw profileError
+
+  if (profileRow) {
+    profile = profileRow
+  } else if (authUser) {
+    profile = await ensureProfileRow(authUser)
+  } else {
+    throw new Error('Profile not found. Try logging out and back in.')
+  }
+
+  // Prefer security-definer RPC so RLS cannot hide memberships after login
+  let memberships = []
+  let usedRpc = false
+  let rpcMembershipError = null
+  const warnings = []
+
+  // Link any email-matched memberships that are missing user_id
+  const { error: linkError } = await supabase.rpc('link_my_memberships')
+  if (linkError) {
+    console.warn('link_my_memberships unavailable:', linkError.message)
+    warnings.push(`link_my_memberships: ${linkError.message}`)
+  }
+
+  const { data: rpcMemberships, error: rpcMemErr } = await supabase.rpc('get_my_memberships')
+  rpcMembershipError = rpcMemErr
+
+  if (!rpcMembershipError && Array.isArray(rpcMemberships)) {
+    memberships = rpcMemberships
+    usedRpc = true
+  } else {
+    if (rpcMembershipError) {
+      console.warn('get_my_memberships RPC failed, falling back:', rpcMembershipError.message)
+      warnings.push(`get_my_memberships failed: ${rpcMembershipError.message}`)
     }
+
+    const { data: membershipRows, error: membershipError } = await supabase
+      .from('household_members')
+      .select('id, household_id, user_id, name, email, phone, role')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true })
+
+    if (membershipError) {
+      warnings.push(`membership query failed: ${membershipError.message}`)
+      throw membershipError
+    }
+    memberships = membershipRows ?? []
+
+    if (memberships.length === 0 && profile.email) {
+      const { data: emailMemberships, error: emailMembershipError } = await supabase
+        .from('household_members')
+        .select('id, household_id, user_id, name, email, phone, role')
+        .ilike('email', profile.email)
+        .order('created_at', { ascending: true })
+
+      if (!emailMembershipError && emailMemberships?.length) {
+        memberships = emailMemberships
+        const unlinked = emailMemberships.filter((row) => row.user_id !== userId)
+        if (unlinked.length) {
+          await Promise.all(
+            unlinked.map((row) =>
+              supabase
+                .from('household_members')
+                .update({ user_id: userId })
+                .eq('id', row.id)
+            )
+          )
+        }
+      } else if (emailMembershipError) {
+        warnings.push(`email membership query failed: ${emailMembershipError.message}`)
+      }
+    }
+  }
+
+  const householdIds = [...new Set(memberships.map((row) => row.household_id).filter(Boolean))]
+
+  console.info('[RentRight] memberships loaded', {
+    userId,
+    email: profile.email,
+    membershipCount: memberships.length,
+    householdIds,
+    usedRpc,
+    rpcError: rpcMembershipError?.message ?? null,
   })
 
-  return {
-    ...fresh,
-    ...saved,
-    currentUserId: saved.currentUserId ?? null,
-    households,
-    accounts,
-    members,
-    expenses: (saved.expenses || fresh.expenses).map((expense) => ({
-      ...expense,
-      householdId: expense.householdId || DEFAULT_HOUSEHOLD_ID,
-      participants: expense.participants?.length
-        ? expense.participants
-        : members
-            .filter((member) => (expense.householdId || DEFAULT_HOUSEHOLD_ID) === member.householdId)
-            .map((member) => member.id),
-    })),
-    maintenance: (saved.maintenance || fresh.maintenance).map((request) => ({
-      ...request,
-      householdId: request.householdId || DEFAULT_HOUSEHOLD_ID,
-    })),
-    documents: (saved.documents || fresh.documents).map((doc) => ({
-      ...doc,
-      householdId: doc.householdId || DEFAULT_HOUSEHOLD_ID,
-    })),
-    activity: (saved.activity?.length ? saved.activity : fresh.activity).map((item) => ({
-      ...item,
-      householdId: item.householdId || DEFAULT_HOUSEHOLD_ID,
-    })),
-  }
-}
+  let households = []
+  if (householdIds.length > 0) {
+    const { data: rpcHouseholds, error: rpcHouseholdsError } = await supabase.rpc('get_my_households')
 
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return normalizeState(JSON.parse(raw))
-  } catch {
-    // If storage is corrupted, fall back to fresh sample data.
+    if (!rpcHouseholdsError && Array.isArray(rpcHouseholds) && rpcHouseholds.length > 0) {
+      households = rpcHouseholds
+    } else {
+      if (rpcHouseholdsError) {
+        warnings.push(`get_my_households failed: ${rpcHouseholdsError.message}`)
+      }
+
+      const { data: householdRows, error: householdsError } = await supabase
+        .from('households')
+        .select('id, name, unit, address')
+        .in('id', householdIds)
+        .order('name')
+
+      if (householdsError) {
+        warnings.push(`households query failed: ${householdsError.message}`)
+        // Last resort: synthesize from membership household ids with placeholder names
+        households = householdIds.map((id) => ({
+          id,
+          name: 'Household',
+          unit: '',
+          address: '',
+        }))
+      } else {
+        households = householdRows ?? []
+      }
+    }
   }
-  return getInitialState()
+
+  console.info('[RentRight] households loaded', {
+    householdCount: households.length,
+    names: households.map((h) => h.name),
+  })
+
+  if (householdIds.length > 0 && households.length === 0) {
+    warnings.push(
+      'Memberships were found but households could not be loaded. Re-run supabase/schema.sql in the Supabase SQL Editor.'
+    )
+  }
+
+  const activeHouseholdId =
+    profile.active_household_id && householdIds.includes(profile.active_household_id)
+      ? profile.active_household_id
+      : householdIds[0] ?? null
+
+  if (activeHouseholdId && activeHouseholdId !== profile.active_household_id) {
+    await supabase.from('profiles').update({ active_household_id: activeHouseholdId }).eq('id', userId)
+    profile.active_household_id = activeHouseholdId
+  }
+
+  const household = households.find((row) => row.id === activeHouseholdId) ?? null
+
+  let members = []
+  if (activeHouseholdId) {
+    const { data: memberRows, error: membersError } = await supabase
+      .from('household_members')
+      .select('id, household_id, user_id, name, email, phone, role')
+      .eq('household_id', activeHouseholdId)
+      .order('created_at', { ascending: true })
+
+    if (membersError) throw membersError
+    members = memberRows ?? []
+  }
+
+  let expenses = []
+  let documents = []
+  let maintenanceRequests = []
+  let activities = []
+
+  if (activeHouseholdId) {
+    const { data: expenseRows, error: expensesError } = await supabase
+      .from('expenses')
+      .select(
+        `id, household_id, description, amount, category, expense_date,
+         paid_by_member_id, split_mode, created_by, created_at,
+         splits:expense_splits (id, member_id, amount, percentage, paid, paid_at)`
+      )
+      .eq('household_id', activeHouseholdId)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (expensesError) {
+      console.error('Expenses load failed:', expensesError.message)
+      warnings.push(`Expenses could not load: ${expensesError.message}`)
+    } else {
+      expenses = expenseRows ?? []
+    }
+
+    const { data: documentRows, error: documentsError } = await supabase
+      .from('documents')
+      .select(
+        'id, household_id, title, category, file_name, file_path, file_size, mime_type, uploaded_by, created_at'
+      )
+      .eq('household_id', activeHouseholdId)
+      .order('created_at', { ascending: false })
+
+    if (documentsError) {
+      console.error('Documents load failed:', documentsError.message)
+      warnings.push(`Documents could not load: ${documentsError.message}`)
+    } else {
+      documents = documentRows ?? []
+    }
+
+    const { data: maintenanceRows, error: maintenanceError } = await supabase
+      .from('maintenance_requests')
+      .select(
+        `id, household_id, title, description, category, priority, status,
+         submitted_by, submitted_by_member_id, created_at, updated_at`
+      )
+      .eq('household_id', activeHouseholdId)
+      .order('created_at', { ascending: false })
+
+    if (maintenanceError) {
+      console.error('Maintenance load failed:', maintenanceError.message)
+      warnings.push(
+        'Maintenance table missing or blocked. Run the maintenance section of supabase/schema.sql in the Supabase SQL Editor.'
+      )
+    } else {
+      maintenanceRequests = maintenanceRows ?? []
+    }
+
+    const { data: activityRows, error: activitiesError } = await supabase
+      .from('activities')
+      .select(
+        `id, household_id, actor_user_id, actor_member_id, activity_type,
+         description, related_entity_type, related_entity_id, created_at`
+      )
+      .eq('household_id', activeHouseholdId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (activitiesError) {
+      console.error('Activity load failed:', activitiesError.message)
+      warnings.push(
+        'Activities table missing or blocked. Run the activities section of supabase/schema.sql in the Supabase SQL Editor.'
+      )
+    } else {
+      activities = activityRows ?? []
+    }
+  }
+
+  return {
+    profile,
+    households,
+    household,
+    members,
+    expenses,
+    documents,
+    maintenanceRequests,
+    activities,
+    warnings,
+  }
 }
 
 export function AppProvider({ children }) {
-  const [state, setState] = useState(loadState)
+  const [session, setSession] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [dataLoading, setDataLoading] = useState(false)
+  const [dataError, setDataError] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [households, setHouseholds] = useState([])
+  const [household, setHousehold] = useState(null)
+  const [members, setMembers] = useState([])
+  const [expenses, setExpenses] = useState([])
+  const [documents, setDocuments] = useState([])
+  const [maintenanceRequests, setMaintenanceRequests] = useState([])
+  const [activities, setActivities] = useState([])
+
+  const userId = session?.user?.id ?? null
+  const authUser = session?.user ?? null
+
+  const currentUser = useMemo(() => {
+    if (!authUser) return null
+    return {
+      id: authUser.id,
+      name: profile?.display_name ?? authUser.user_metadata?.display_name ?? '',
+      email: profile?.email ?? authUser.email ?? '',
+    }
+  }, [authUser, profile])
+
+  const refreshHouseholdData = useCallback(async (uid, user) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase is not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to .env.')
+    }
+    const data = await fetchHouseholdData(uid, user)
+    setProfile(data.profile)
+    setHouseholds(data.households)
+    setHousehold(data.household)
+    setMembers(data.members)
+    setExpenses(data.expenses)
+    setDocuments(data.documents)
+    setMaintenanceRequests(data.maintenanceRequests)
+    setActivities(data.activities)
+    setDataError(data.warnings?.length ? data.warnings.join(' ') : null)
+    return data
+  }, [])
+
+  const resolveProfile = useCallback(async () => {
+    if (!userId || !authUser) return null
+    if (profile) return profile
+    const row = await ensureProfileRow(authUser)
+    setProfile(row)
+    return row
+  }, [userId, authUser, profile])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [state])
-
-  const currentUser = useMemo(
-    () => state.accounts.find((account) => account.id === state.currentUserId) || null,
-    [state.accounts, state.currentUserId]
-  )
-
-  const householdId = currentUser?.householdId || null
-  const household = useMemo(
-    () => state.households.find((item) => item.id === householdId) || null,
-    [state.households, householdId]
-  )
-
-  const currentMember = useMemo(
-    () => state.members.find((member) => member.id === currentUser?.memberId) || null,
-    [state.members, currentUser]
-  )
-
-  const householdMembers = useMemo(
-    () => state.members.filter((member) => member.householdId === householdId),
-    [state.members, householdId]
-  )
-
-  const householdExpenses = useMemo(
-    () => state.expenses.filter((expense) => expense.householdId === householdId),
-    [state.expenses, householdId]
-  )
-
-  const householdMaintenance = useMemo(
-    () => state.maintenance.filter((request) => request.householdId === householdId),
-    [state.maintenance, householdId]
-  )
-
-  const householdDocuments = useMemo(
-    () => state.documents.filter((doc) => doc.householdId === householdId),
-    [state.documents, householdId]
-  )
-
-  const householdActivity = useMemo(
-    () => state.activity.filter((item) => item.householdId === householdId),
-    [state.activity, householdId]
-  )
-
-  const addActivity = (draft, text, targetHouseholdId = householdId) => ({
-    ...draft,
-    activity: targetHouseholdId
-      ? [{ id: makeId('a'), householdId: targetHouseholdId, text, at: today() }, ...(draft.activity || [])].slice(0, 50)
-      : draft.activity || [],
-  })
-
-  const login = ({ email, password }) => {
-    const account = state.accounts.find(
-      (item) => item.email === normalizeEmail(email) && item.password === password
-    )
-
-    if (!account) {
-      return { ok: false, message: 'Invalid email or password.' }
+    if (!isSupabaseConfigured) {
+      setAuthReady(true)
+      return
     }
 
-    setState((s) => ({ ...s, currentUserId: account.id }))
-    return { ok: true }
-  }
+    let cancelled = false
 
-  const register = ({ name, email, password }) => {
-    const cleanEmail = normalizeEmail(email)
-    if (state.accounts.some((account) => account.email === cleanEmail)) {
-      return { ok: false, message: 'An account already exists for that email.' }
-    }
-
-    const accountId = makeId('u')
-    const displayName = name.trim()
-
-    setState((s) => ({
-      ...s,
-      currentUserId: accountId,
-      accounts: [
-        ...s.accounts,
-        {
-          id: accountId,
-          memberId: null,
-          householdId: null,
-          name: displayName,
-          email: cleanEmail,
-          password,
-        },
-      ],
-    }))
-
-    return { ok: true }
-  }
-
-  const logout = () => setState((s) => ({ ...s, currentUserId: null }))
-
-  const createHousehold = ({ name, unit, address, phone }) => {
-    if (!currentUser) return { ok: false, message: 'Please log in first.' }
-    if (currentUser.householdId) {
-      return { ok: false, message: 'You are already in a household.' }
-    }
-
-    const newHouseholdId = makeId('h')
-    const memberId = makeId('m')
-    const displayName = currentUser.name
-
-    setState((s) => {
-      const next = {
-        ...s,
-        households: [
-          ...s.households,
-          {
-            id: newHouseholdId,
-            name: name.trim(),
-            unit: unit.trim() || 'Primary unit',
-            address: address.trim(),
-            createdBy: memberId,
-          },
-        ],
-        members: [
-          ...s.members,
-          {
-            id: memberId,
-            householdId: newHouseholdId,
-            name: displayName,
-            email: currentUser.email,
-            phone: phone.trim(),
-            role: 'leaseholder',
-          },
-        ],
-        accounts: s.accounts.map((account) =>
-          account.id === currentUser.id
-            ? { ...account, householdId: newHouseholdId, memberId }
-            : account
-        ),
-      }
-      return addActivity(next, `${displayName} created the household.`, newHouseholdId)
+    supabase.auth.getSession().then(({ data }) => {
+      if (!cancelled) setSession(data.session)
+      if (!cancelled) setAuthReady(true)
     })
 
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
+    })
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userId || !authUser || !isSupabaseConfigured) {
+      setProfile(null)
+      setHouseholds([])
+      setHousehold(null)
+      setMembers([])
+      setExpenses([])
+      setDocuments([])
+      setMaintenanceRequests([])
+      setActivities([])
+      setDataError(null)
+      return
+    }
+
+    let cancelled = false
+    setDataLoading(true)
+    setDataError(null)
+
+    refreshHouseholdData(userId, authUser)
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to load household data:', err)
+          setDataError(err.message || 'Could not load your profile.')
+          // Keep any already-loaded profile/households; do not wipe on reload errors.
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDataLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [userId, authUser?.id, refreshHouseholdData])
+
+  const activeHouseholdId = profile?.active_household_id ?? household?.id ?? null
+
+  const currentMember = useMemo(
+    () => resolveCurrentMember(members, userId, profile?.email ?? authUser?.email),
+    [members, userId, profile?.email, authUser?.email]
+  )
+
+  const login = async ({ email, password }) => {
+    if (!isSupabaseConfigured) {
+      return { ok: false, message: 'Supabase is not configured. Add credentials to .env.' }
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: normalizeEmail(email),
+      password,
+    })
+
+    if (error) return { ok: false, message: authErrorMessage(error) }
+
+    try {
+      await ensureProfileRow(data.user)
+      await refreshHouseholdData(data.user.id, data.user)
+    } catch (err) {
+      return { ok: false, message: err.message || 'Signed in but could not load your profile.' }
+    }
+
     return { ok: true }
   }
 
-  const addMember = ({ name, email, phone }) => {
-    if (!householdId) return { ok: false, message: 'Create a household first.' }
+  const register = async ({ name, email, password }) => {
+    if (!isSupabaseConfigured) {
+      return { ok: false, message: 'Supabase is not configured. Add credentials to .env.' }
+    }
+
+    const cleanEmail = normalizeEmail(email)
+    const displayName = name.trim()
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: { data: { display_name: displayName } },
+    })
+
+    if (error) return { ok: false, message: authErrorMessage(error) }
+
+    if (!data.user) {
+      return { ok: false, message: 'Registration failed. Please try again.' }
+    }
+
+    if (!data.session) {
+      return {
+        ok: false,
+        message:
+          'Account was created but you are not signed in. In Supabase, disable “Confirm email” under Authentication → Providers → Email, then log in.',
+      }
+    }
+
+    try {
+      await ensureProfileRow({ ...data.user, user_metadata: { display_name: displayName } })
+      await refreshHouseholdData(data.user.id, data.user)
+    } catch (err) {
+      return { ok: false, message: err.message || 'Account created but could not load profile.' }
+    }
+
+    return { ok: true }
+  }
+
+  const logout = async () => {
+    await supabase.auth.signOut()
+    setProfile(null)
+    setHouseholds([])
+    setHousehold(null)
+    setMembers([])
+    setExpenses([])
+    setDocuments([])
+    setMaintenanceRequests([])
+    setActivities([])
+    setDataError(null)
+  }
+
+  const logActivity = async ({
+    householdId,
+    activityType,
+    description,
+    relatedEntityType = '',
+    relatedEntityId = null,
+    actorMemberId = null,
+  }) => {
+    const targetHouseholdId = householdId ?? activeHouseholdId
+    if (!targetHouseholdId || !userId || !description?.trim()) return
+
+    const { error } = await supabase.from('activities').insert({
+      household_id: targetHouseholdId,
+      actor_user_id: userId,
+      actor_member_id: actorMemberId ?? currentMember?.id ?? null,
+      activity_type: activityType,
+      description: description.trim(),
+      related_entity_type: relatedEntityType,
+      related_entity_id: relatedEntityId,
+    })
+
+    if (error) {
+      console.error('Failed to log activity:', error.message)
+    }
+  }
+
+  const setActiveHousehold = async (householdId) => {
+    if (!userId) return { ok: false, message: 'Please log in first.' }
+    if (!households.some((row) => row.id === householdId)) {
+      return { ok: false, message: 'You are not a member of that household.' }
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ active_household_id: householdId })
+      .eq('id', userId)
+
+    if (error) return { ok: false, message: error.message }
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const createHousehold = async ({ name, unit, address, phone }) => {
+    if (!userId) return { ok: false, message: 'Please log in first.' }
+
+    try {
+      let activeProfile = profile
+      if (!activeProfile) activeProfile = await resolveProfile()
+      if (!activeProfile && authUser) activeProfile = await ensureProfileRow(authUser)
+
+      if (!activeProfile) {
+        return { ok: false, message: 'Could not load your profile. Try logging out and back in.' }
+      }
+
+      const newHouseholdId = crypto.randomUUID()
+      const memberPhone = (phone ?? '').trim()
+      const memberEmail = activeProfile.email || normalizeEmail(authUser?.email ?? '')
+
+      if (!memberEmail && !memberPhone) {
+        return {
+          ok: false,
+          message: 'Add a phone number, or make sure your account email is set, then try again.',
+        }
+      }
+
+      const { error: householdError } = await supabase.from('households').insert({
+        id: newHouseholdId,
+        name: name.trim(),
+        unit: unit.trim() || 'Primary unit',
+        address: address.trim(),
+      })
+
+      if (householdError) return { ok: false, message: householdError.message }
+
+      const { error: memberError } = await supabase.from('household_members').insert({
+        household_id: newHouseholdId,
+        user_id: userId,
+        name: activeProfile.display_name,
+        email: memberEmail,
+        phone: memberPhone,
+        role: 'leaseholder',
+      })
+
+      if (memberError) return { ok: false, message: memberError.message }
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ active_household_id: newHouseholdId })
+        .eq('id', userId)
+
+      if (profileError) return { ok: false, message: profileError.message }
+
+      await logActivity({
+        householdId: newHouseholdId,
+        activityType: 'household_created',
+        description: `${activeProfile.display_name} created household “${name.trim()}”`,
+        relatedEntityType: 'household',
+        relatedEntityId: newHouseholdId,
+      })
+
+      await refreshHouseholdData(userId, authUser)
+      return { ok: true }
+    } catch (err) {
+      console.error('createHousehold failed:', err)
+      return { ok: false, message: err.message || 'Could not create household.' }
+    }
+  }
+
+  const addMember = async ({ name, email, phone }) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
     const cleanEmail = normalizeEmail(email)
     const cleanPhone = phone.trim()
     if (!cleanEmail && !cleanPhone) {
       return { ok: false, message: 'Add either a phone number or email address.' }
     }
 
-    const existingMember = state.members.find(
-      (member) => member.householdId === householdId && (
-        (cleanEmail && member.email === cleanEmail) || (cleanPhone && member.phone === cleanPhone)
-      )
+    const duplicate = members.some(
+      (member) =>
+        (cleanEmail && member.email?.toLowerCase() === cleanEmail) ||
+        (cleanPhone && member.phone === cleanPhone)
     )
-    if (existingMember) return { ok: false, message: 'That member is already in this household.' }
+    if (duplicate) return { ok: false, message: 'That member is already in this household.' }
 
-    const existingAccount = cleanEmail
-      ? state.accounts.find((account) => account.email === cleanEmail)
-      : null
-    if (existingAccount?.householdId) {
-      return { ok: false, message: 'That user already belongs to another household.' }
-    }
+    const { data: createdMember, error } = await supabase
+      .from('household_members')
+      .insert({
+        household_id: activeHouseholdId,
+        name: name.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
+        role: 'tenant',
+      })
+      .select('id')
+      .single()
 
-    const memberId = makeId('m')
-    const displayName = name.trim()
+    if (error) return { ok: false, message: error.message }
 
-    setState((s) => {
-      const next = {
-        ...s,
-        members: [
-          ...s.members,
-          {
-            id: memberId,
-            householdId,
-            name: displayName,
-            email: cleanEmail,
-            phone: cleanPhone,
-            role: 'tenant',
-          },
-        ],
-        accounts: existingAccount
-          ? s.accounts.map((account) =>
-              account.id === existingAccount.id
-                ? { ...account, householdId, memberId, name: displayName }
-                : account
-            )
-          : s.accounts,
-      }
-      return addActivity(next, `${currentMember?.name || 'A household member'} added ${displayName} to the household.`)
+    await logActivity({
+      activityType: 'member_added',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} added member “${name.trim()}”`,
+      relatedEntityType: 'member',
+      relatedEntityId: createdMember?.id ?? null,
     })
 
+    await refreshHouseholdData(userId, authUser)
     return { ok: true }
   }
 
-  const addExpense = (expense) =>
-    setState((s) => {
-      const actor = currentMember?.name || 'A household member'
-      const participants = expense.participants?.length
-        ? expense.participants
-        : householdMembers.map((member) => member.id)
-      const next = {
-        ...s,
-        expenses: [
-          {
-            ...expense,
-            id: makeId('e'),
-            householdId,
-            participants,
-            paidBy: [],
-            createdBy: currentMember?.id,
-          },
-          ...s.expenses,
-        ],
+  const saveExpense = async ({
+    expenseId,
+    description,
+    amount,
+    category,
+    expenseDate,
+    paidByMemberId,
+    splitMode,
+    splits,
+  }) => {
+    if (!activeHouseholdId || !userId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
+    const parsedAmount = Number(amount)
+    if (!description.trim() || Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      return { ok: false, message: 'Enter a description and amount greater than zero.' }
+    }
+
+    if (!members.some((member) => member.id === paidByMemberId)) {
+      return { ok: false, message: 'Choose who paid for this expense.' }
+    }
+
+    const splitError = validateSplitPayload(parsedAmount, splitMode, splits, members)
+    if (splitError) return { ok: false, message: splitError }
+
+    try {
+      if (expenseId) {
+        const { error: updateError } = await supabase
+          .from('expenses')
+          .update({
+            description: description.trim(),
+            amount: parsedAmount,
+            category: category || 'other',
+            expense_date: expenseDate || new Date().toISOString().slice(0, 10),
+            paid_by_member_id: paidByMemberId,
+            split_mode: splitMode,
+          })
+          .eq('id', expenseId)
+          .eq('household_id', activeHouseholdId)
+
+        if (updateError) return { ok: false, message: updateError.message }
+        await replaceExpenseSplits(expenseId, splits)
+        await logActivity({
+          activityType: 'expense_updated',
+          description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} updated expense “${description.trim()}”`,
+          relatedEntityType: 'expense',
+          relatedEntityId: expenseId,
+        })
+      } else {
+        const { data: created, error: insertError } = await supabase
+          .from('expenses')
+          .insert({
+            household_id: activeHouseholdId,
+            description: description.trim(),
+            amount: parsedAmount,
+            category: category || 'other',
+            expense_date: expenseDate || new Date().toISOString().slice(0, 10),
+            paid_by_member_id: paidByMemberId,
+            split_mode: splitMode,
+            created_by: userId,
+          })
+          .select('id')
+          .single()
+
+        if (insertError) return { ok: false, message: insertError.message }
+        await replaceExpenseSplits(created.id, splits)
+        await logActivity({
+          activityType: 'expense_added',
+          description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} added expense “${description.trim()}” ($${parsedAmount.toFixed(2)})`,
+          relatedEntityType: 'expense',
+          relatedEntityId: created.id,
+        })
       }
-      return addActivity(next, `${actor} added an expense: ${expense.title}.`)
+
+      await refreshHouseholdData(userId, authUser)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: err.message || 'Could not save expense.' }
+    }
+  }
+
+  const addExpense = (payload) => saveExpense(payload)
+
+  const updateExpense = (expenseId, payload) => saveExpense({ ...payload, expenseId })
+
+  const setSplitPaid = async (expenseId, memberId, paid) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'No active household.' }
+    }
+
+    const expense = expenses.find((row) => row.id === expenseId)
+    if (!expense) return { ok: false, message: 'Expense not found.' }
+
+    const { error } = await supabase
+      .from('expense_splits')
+      .update({
+        paid,
+        paid_at: paid ? new Date().toISOString() : null,
+      })
+      .eq('expense_id', expenseId)
+      .eq('member_id', memberId)
+
+    if (error) return { ok: false, message: error.message }
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const markMySharePaid = async (expenseId, paid) => {
+    if (!currentMember) {
+      return { ok: false, message: 'Could not find your household member profile.' }
+    }
+    return setSplitPaid(expenseId, currentMember.id, paid)
+  }
+
+  const markMemberSharePaid = async (expenseId, memberId, paid) => {
+    if (!members.some((member) => member.id === memberId)) {
+      return { ok: false, message: 'Member not found in this household.' }
+    }
+    return setSplitPaid(expenseId, memberId, paid)
+  }
+
+  const deleteExpense = async (expenseId) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'No active household.' }
+    }
+
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', expenseId)
+      .eq('household_id', activeHouseholdId)
+
+    if (error) return { ok: false, message: error.message }
+
+    const actorName = currentMember?.name ?? currentUser?.name ?? 'Someone'
+    await logActivity({
+      activityType: 'expense_deleted',
+      description: `${actorName} deleted an expense`,
+      relatedEntityType: 'expense',
+      relatedEntityId: expenseId,
     })
 
-  const updateExpense = (expenseId, updates) =>
-    setState((s) => {
-      const existing = s.expenses.find((expense) => expense.id === expenseId)
-      const actor = currentMember?.name || 'A household member'
-      const participants = updates.participants?.length ? updates.participants : existing?.participants
-      const next = {
-        ...s,
-        expenses: s.expenses.map((expense) =>
-          expense.id === expenseId
-            ? {
-                ...expense,
-                ...updates,
-                participants,
-                paidBy: (expense.paidBy || []).filter((memberId) =>
-                  (participants || []).includes(memberId)
-                ),
-              }
-            : expense
-        ),
-      }
-      return addActivity(next, `${actor} edited expense: ${existing?.title || updates.title}.`)
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const uploadDocument = async ({ title, category, file }) => {
+    if (!activeHouseholdId || !userId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
+    if (!file) return { ok: false, message: 'Choose a file to upload.' }
+    if (file.size > MAX_DOCUMENT_BYTES) {
+      return { ok: false, message: 'File must be 10 MB or smaller.' }
+    }
+
+    const cleanTitle = title.trim()
+    if (!cleanTitle) return { ok: false, message: 'Enter a document title.' }
+
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const filePath = `${activeHouseholdId}/${crypto.randomUUID()}-${safeName}`
+
+    const { error: uploadError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .upload(filePath, file, { upsert: false, contentType: file.type || undefined })
+
+    if (uploadError) {
+      const hint = /bucket/i.test(uploadError.message)
+        ? ' Create the “household-documents” storage bucket (run section 7 of supabase/schema.sql).'
+        : ''
+      return { ok: false, message: uploadError.message + hint }
+    }
+
+    const { data: createdDoc, error: insertError } = await supabase
+      .from('documents')
+      .insert({
+        household_id: activeHouseholdId,
+        title: cleanTitle,
+        category: category || 'other',
+        file_name: file.name,
+        file_path: filePath,
+        file_size: file.size,
+        mime_type: file.type || 'application/octet-stream',
+        uploaded_by: userId,
+      })
+      .select('id')
+      .single()
+
+    if (insertError) {
+      await supabase.storage.from(DOCUMENT_BUCKET).remove([filePath])
+      return { ok: false, message: insertError.message }
+    }
+
+    await logActivity({
+      activityType: 'document_uploaded',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} uploaded document “${cleanTitle}”`,
+      relatedEntityType: 'document',
+      relatedEntityId: createdDoc?.id ?? null,
     })
 
-  const deleteExpense = (expenseId) =>
-    setState((s) => {
-      const removed = s.expenses.find((expense) => expense.id === expenseId)
-      const actor = currentMember?.name || 'A household member'
-      const next = { ...s, expenses: s.expenses.filter((expense) => expense.id !== expenseId) }
-      return addActivity(next, `${actor} deleted expense: ${removed?.title || 'expense'}.`)
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const deleteDocument = async (documentId) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'No active household.' }
+    }
+
+    const doc = documents.find((row) => row.id === documentId)
+    if (!doc) return { ok: false, message: 'Document not found.' }
+
+    const { error: storageError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .remove([doc.file_path])
+
+    if (storageError) return { ok: false, message: storageError.message }
+
+    const { error } = await supabase
+      .from('documents')
+      .delete()
+      .eq('id', documentId)
+      .eq('household_id', activeHouseholdId)
+
+    if (error) return { ok: false, message: error.message }
+
+    await logActivity({
+      activityType: 'document_deleted',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} deleted document “${doc.title}”`,
+      relatedEntityType: 'document',
+      relatedEntityId: documentId,
     })
 
-  const markExpensePaid = (expenseId, memberId) =>
-    setState((s) => {
-      const expense = s.expenses.find((item) => item.id === expenseId)
-      const member = s.members.find((item) => item.id === memberId)
-      const next = {
-        ...s,
-        expenses: s.expenses.map((item) =>
-          item.id === expenseId && !item.paidBy?.includes(memberId)
-            ? { ...item, paidBy: [...(item.paidBy || []), memberId] }
-            : item
-        ),
-      }
-      return addActivity(next, `${member?.name || 'A household member'} made a payment for ${expense?.title || 'an expense'}.`)
-    })
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
 
-  const addMaintenance = (request) =>
-    setState((s) => {
-      const actor = currentMember?.name || request.submittedBy || 'A household member'
-      const next = {
-        ...s,
-        maintenance: [
-          {
-            ...request,
-            id: makeId('r'),
-            householdId,
+  const getDocumentDownloadUrl = async (filePath) => {
+    const { data, error } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .createSignedUrl(filePath, 3600)
+
+    if (error) throw error
+    return data.signedUrl
+  }
+
+  const saveMaintenanceRequest = async ({
+    requestId,
+    title,
+    description,
+    category,
+    priority,
+  }) => {
+    if (!activeHouseholdId || !userId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
+    const cleanTitle = title.trim()
+    if (!cleanTitle) return { ok: false, message: 'Enter a title for the request.' }
+
+    try {
+      if (requestId) {
+        const existing = maintenanceRequests.find((row) => row.id === requestId)
+        if (!existing) return { ok: false, message: 'Request not found.' }
+        if (existing.status !== 'submitted') {
+          return { ok: false, message: 'Only submitted requests can be edited.' }
+        }
+
+        const { error } = await supabase
+          .from('maintenance_requests')
+          .update({
+            title: cleanTitle,
+            description: description.trim(),
+            category: category || 'other',
+            priority: priority || 'medium',
+          })
+          .eq('id', requestId)
+          .eq('household_id', activeHouseholdId)
+
+        if (error) return { ok: false, message: error.message }
+
+        await logActivity({
+          activityType: 'maintenance_updated',
+          description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} updated maintenance request “${cleanTitle}”`,
+          relatedEntityType: 'maintenance',
+          relatedEntityId: requestId,
+        })
+      } else {
+        const { data: created, error } = await supabase
+          .from('maintenance_requests')
+          .insert({
+            household_id: activeHouseholdId,
+            title: cleanTitle,
+            description: description.trim(),
+            category: category || 'other',
+            priority: priority || 'medium',
             status: 'submitted',
-            date: request.date || today(),
-            submittedBy: actor,
-          },
-          ...s.maintenance,
-        ],
+            submitted_by: userId,
+            submitted_by_member_id: currentMember?.id ?? null,
+          })
+          .select('id')
+          .single()
+
+        if (error) return { ok: false, message: error.message }
+
+        await logActivity({
+          activityType: 'maintenance_created',
+          description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} submitted maintenance request “${cleanTitle}”`,
+          relatedEntityType: 'maintenance',
+          relatedEntityId: created.id,
+        })
       }
-      return addActivity(next, `${actor} submitted maintenance: ${request.title}.`)
+
+      await refreshHouseholdData(userId, authUser)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: err.message || 'Could not save maintenance request.' }
+    }
+  }
+
+  const addMaintenanceRequest = (payload) => saveMaintenanceRequest(payload)
+
+  const updateMaintenanceRequest = (requestId, payload) =>
+    saveMaintenanceRequest({ ...payload, requestId })
+
+  const updateMaintenanceStatus = async (requestId, status) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'No active household.' }
+    }
+
+    const allowed = MAINTENANCE_STATUSES.map((item) => item.value)
+    if (!allowed.includes(status)) {
+      return { ok: false, message: 'Invalid status.' }
+    }
+
+    const existing = maintenanceRequests.find((row) => row.id === requestId)
+    if (!existing) return { ok: false, message: 'Request not found.' }
+
+    const { error } = await supabase
+      .from('maintenance_requests')
+      .update({ status })
+      .eq('id', requestId)
+      .eq('household_id', activeHouseholdId)
+
+    if (error) return { ok: false, message: error.message }
+
+    const statusLabel = MAINTENANCE_STATUSES.find((item) => item.value === status)?.label ?? status
+    await logActivity({
+      activityType: 'maintenance_status_changed',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} marked “${existing.title}” as ${statusLabel}`,
+      relatedEntityType: 'maintenance',
+      relatedEntityId: requestId,
     })
 
-  const updateMaintenance = (id, updates) =>
-    setState((s) => {
-      const existing = s.maintenance.find((request) => request.id === id)
-      const actor = currentMember?.name || 'A household member'
-      const next = {
-        ...s,
-        maintenance: s.maintenance.map((request) =>
-          request.id === id ? { ...request, ...updates } : request
-        ),
-      }
-      const action = updates.status && updates.status !== existing?.status ? 'updated' : 'edited'
-      return addActivity(next, `${actor} ${action} maintenance: ${existing?.title || updates.title}.`)
-    })
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
 
-  const updateMaintenanceStatus = (id, status) => updateMaintenance(id, { status })
-
-  const deleteMaintenance = (id) =>
-    setState((s) => {
-      const removed = s.maintenance.find((request) => request.id === id)
-      const actor = currentMember?.name || 'A household member'
-      const next = { ...s, maintenance: s.maintenance.filter((request) => request.id !== id) }
-      return addActivity(next, `${actor} deleted maintenance: ${removed?.title || 'request'}.`)
-    })
-
-  const addDocument = (doc) =>
-    setState((s) => {
-      const actor = currentMember?.name || 'A household member'
-      const next = {
-        ...s,
-        documents: [{ ...doc, id: makeId('d'), householdId, uploadedBy: actor }, ...s.documents],
-      }
-      return addActivity(next, `${actor} uploaded document: ${doc.name}.`)
-    })
-
-  const updateDocument = (id, updates) =>
-    setState((s) => {
-      const existing = s.documents.find((doc) => doc.id === id)
-      const actor = currentMember?.name || 'A household member'
-      const next = {
-        ...s,
-        documents: s.documents.map((doc) => (doc.id === id ? { ...doc, ...updates } : doc)),
-      }
-      return addActivity(next, `${actor} edited document: ${existing?.name || updates.name}.`)
-    })
-
-  const deleteDocument = (id) =>
-    setState((s) => {
-      const removed = s.documents.find((doc) => doc.id === id)
-      const actor = currentMember?.name || 'A household member'
-      const next = { ...s, documents: s.documents.filter((doc) => doc.id !== id) }
-      return addActivity(next, `${actor} deleted document: ${removed?.name || 'document'}.`)
-    })
-
-  const resetDemo = () => {
-    const fresh = getInitialState()
-    setState(fresh)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh))
+  const cancelMaintenanceRequest = async (requestId) => {
+    const existing = maintenanceRequests.find((row) => row.id === requestId)
+    if (!existing) return { ok: false, message: 'Request not found.' }
+    if (existing.status !== 'submitted') {
+      return { ok: false, message: 'Only submitted requests can be cancelled.' }
+    }
+    return updateMaintenanceStatus(requestId, 'cancelled')
   }
 
   const value = {
-    ...state,
+    loading: !authReady || (Boolean(userId) && dataLoading),
+    isConfigured: isSupabaseConfigured,
+    dataError,
     currentUser,
     currentMember,
     household,
-    householdId,
-    members: householdMembers,
-    expenses: householdExpenses,
-    maintenance: householdMaintenance,
-    documents: householdDocuments,
-    activity: householdActivity,
-    hasHousehold: Boolean(householdId && household),
-    isAuthenticated: Boolean(currentUser),
+    households,
+    householdId: activeHouseholdId,
+    members,
+    expenses,
+    documents,
+    maintenanceRequests,
+    activities,
+    expenseCategories: EXPENSE_CATEGORIES,
+    documentCategories: DOCUMENT_CATEGORIES,
+    maintenanceCategories: MAINTENANCE_CATEGORIES,
+    maintenancePriorities: MAINTENANCE_PRIORITIES,
+    maintenanceStatuses: MAINTENANCE_STATUSES,
+    hasHousehold: households.length > 0,
+    hasActiveHousehold: Boolean(household),
+    isAuthenticated: Boolean(session?.user),
+    profileReady: Boolean(profile),
     login,
     register,
     logout,
+    setActiveHousehold,
     createHousehold,
     addMember,
     addExpense,
     updateExpense,
+    markMySharePaid,
+    markMemberSharePaid,
     deleteExpense,
-    markExpensePaid,
-    addMaintenance,
-    updateMaintenance,
-    updateMaintenanceStatus,
-    deleteMaintenance,
-    addDocument,
-    updateDocument,
+    uploadDocument,
     deleteDocument,
-    resetDemo,
+    getDocumentDownloadUrl,
+    addMaintenanceRequest,
+    updateMaintenanceRequest,
+    updateMaintenanceStatus,
+    cancelMaintenanceRequest,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
