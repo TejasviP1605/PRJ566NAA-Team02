@@ -1,62 +1,92 @@
 # RentRight
 
-Shared rental management. **Login, profiles, households, and members** are stored in Supabase (Auth + Postgres).
+RentRight is a shared rental management app for households, members, expenses, maintenance, and documents.
 
----
+User authentication and core data are managed with Supabase (Auth + Postgres + Storage).
 
 ## Tech Stack
 
-- **Frontend:** React 18 + Vite + Tailwind CSS
-- **Backend:** [Supabase](https://supabase.com) — Auth + PostgreSQL
+- Frontend: React 18, Vite, Tailwind CSS
+- Backend: [Supabase](https://supabase.com) (Auth, PostgreSQL, Storage)
 
----
+## Features
+
+- Email/password registration and login
+- Household creation and member management
+- Shared expense tracking and split records
+- Maintenance request tracking
+- Document uploads to the `household-documents` storage bucket
+- Household activity feed
+
+## Prerequisites
+
+- Node.js 18+ and npm
+- A Supabase project
 
 ## Setup
 
-```bash
-npm install
-cp .env.example .env
-```
+1. Install dependencies:
 
-Add **Project URL** and **publishable key** from Supabase → Project Settings → API.
+   ```bash
+   npm install
+   ```
 
-1. Run **`supabase/schema.sql`** in Supabase → SQL Editor.
-2. **Authentication → Providers → Email** → turn **off** “Confirm email” (see comments at top of `supabase/schema.sql`).
+2. Create a `.env` file in the project root:
 
-```bash
-npm run dev
-```
+   ```env
+   VITE_SUPABASE_URL=your_supabase_project_url
+   VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
+   ```
 
-Open http://localhost:3000 → **Register** → create households on the Dashboard.
+   Get these values from **Supabase → Project Settings → API**.
 
----
+3. Configure the database:
+   - Open `supabase/schema.sql`.
+   - Run the SQL in **Supabase → SQL Editor**.
+   - Important: this schema contains `drop` statements meant for fresh/dev environments and will remove existing data.
+
+4. Configure authentication in Supabase:
+   - Go to **Authentication → Providers → Email**.
+   - Turn off **Confirm email** for local testing (as indicated in schema comments).
+
+5. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+6. Open `http://localhost:3000`, register an account, then create your first household from the dashboard.
 
 ## Architecture
 
+```text
+Register / Login  -> Supabase Auth (auth.users)
+                 -> profiles (same id as auth user)
+
+App pages        -> households, household_members, expenses,
+                    expense_splits, documents, maintenance_requests, activities
 ```
-Register / Login  →  Supabase Auth (auth.users)
-                 →  profiles (same id as auth user)
 
-Dashboard       →  households, household_members in Supabase
-```
-
----
-
-## Tables
+## Database Tables
 
 | Table | Purpose |
-|-------|---------|
-| `profiles` | User id, name, email, active household |
-| `households` | Property name, unit, address |
-| `household_members` | People per household |
-| `expenses` | Shared costs per household |
-| `documents` | File metadata (files in Storage bucket `household-documents`) |
+| --- | --- |
+| `profiles` | User profile linked to `auth.users` |
+| `households` | Household/property details |
+| `household_members` | Members and roles per household |
+| `expenses` | Shared household expenses |
+| `expense_splits` | Per-member split details for each expense |
+| `documents` | File metadata for uploaded household documents |
+| `maintenance_requests` | Maintenance tickets and statuses |
+| `activities` | Household activity log |
 
-Open `supabase/schema.sql`, copy all SQL, paste into Supabase SQL Editor, and run. If the database already exists, run only from `-- Expense split type` through the end.
+Storage bucket used by the app: `household-documents`.
 
-See `supabase/schema.sql` for your database report.
+## Notes
 
----
+- If Supabase credentials are missing, the app will show configuration guidance on protected routes.
+- For complete schema details (RLS policies, RPC functions, storage policies), see `supabase/schema.sql`.
+
 ## AI Assistance Disclosure
-AI tools (GitHub Copilot) were used occasionally for code suggestions 
-during development.
+
+AI tools (GitHub Copilot) were used occasionally for code suggestions during development.
