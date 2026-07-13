@@ -62,4 +62,4 @@ AI tools (GitHub Copilot) were used occasionally for code suggestions
 during development.
 
 ## Production deployment link 
-We are using vercel https://prj-566-naa-team02-tejasvip1716s-projects.vercel.app
+We are using vercel https://prj-566-naa-team02.vercel.app/login
