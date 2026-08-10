@@ -1,7 +1,3 @@
--- RentRight database schema (safe to re-run)
--- New project: run this whole file once in Supabase SQL Editor.
--- WARNING: drop statements below wipe existing data — use only on fresh/dev DBs.
-
 drop trigger if exists on_auth_user_created on auth.users;
 
 drop table if exists public.activities cascade;
@@ -43,6 +39,9 @@ create table public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   display_name text not null check (char_length(trim(display_name)) > 0),
   email text not null check (email ~* '^[^@]+@[^@]+\.[^@]+$'),
+  phone text not null default '',
+  address text not null default '',
+  address_details jsonb,
   active_household_id uuid references public.households (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -264,6 +263,89 @@ grant execute on function public.get_my_memberships() to authenticated;
 grant execute on function public.get_my_households() to authenticated;
 grant execute on function public.link_my_memberships() to authenticated;
 
+create or replace function public.remove_household_member(p_member_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target public.household_members%rowtype;
+  fallback_id uuid;
+  member_count integer;
+begin
+  if auth.uid() is null then
+    return jsonb_build_object('ok', false, 'message', 'Not authenticated.');
+  end if;
+
+  select * into target
+  from public.household_members
+  where id = p_member_id;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'message', 'Member not found.');
+  end if;
+
+  if not public.is_household_member(target.household_id) then
+    return jsonb_build_object('ok', false, 'message', 'You are not allowed to modify this household.');
+  end if;
+
+  select count(*)::integer into member_count
+  from public.household_members
+  where household_id = target.household_id;
+
+  if member_count <= 1 then
+    return jsonb_build_object('ok', false, 'message', 'Cannot remove the last member. Delete the household instead.');
+  end if;
+
+  select id into fallback_id
+  from public.household_members
+  where household_id = target.household_id
+    and id is distinct from p_member_id
+  order by created_at asc
+  limit 1;
+
+  if fallback_id is null then
+    return jsonb_build_object('ok', false, 'message', 'Cannot remove the last member. Delete the household instead.');
+  end if;
+
+  update public.expenses
+  set paid_by_member_id = fallback_id,
+      updated_at = now()
+  where household_id = target.household_id
+    and paid_by_member_id = p_member_id;
+
+  update public.maintenance_requests
+  set submitted_by_member_id = null,
+      updated_at = now()
+  where household_id = target.household_id
+    and submitted_by_member_id = p_member_id;
+
+  update public.activities
+  set actor_member_id = null
+  where household_id = target.household_id
+    and actor_member_id = p_member_id;
+
+  delete from public.expense_splits where member_id = p_member_id;
+
+  delete from public.household_members where id = p_member_id;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'message', 'Member was not deleted.');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'message', 'Member removed.',
+    'name', target.name,
+    'household_id', target.household_id
+  );
+end;
+$$;
+
+revoke all on function public.remove_household_member(uuid) from public, anon;
+grant execute on function public.remove_household_member(uuid) to authenticated;
+
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
@@ -305,6 +387,10 @@ create policy households_select_member on public.households
   for select to authenticated using (public.is_household_member(id));
 create policy households_insert_authenticated on public.households
   for insert to authenticated with check (auth.uid() is not null);
+create policy households_update_member on public.households
+  for update to authenticated using (public.is_household_member(id)) with check (public.is_household_member(id));
+create policy households_delete_member on public.households
+  for delete to authenticated using (public.is_household_member(id));
 
 create policy household_members_select_member on public.household_members
   for select to authenticated using (
@@ -329,6 +415,8 @@ create policy household_members_update_own on public.household_members
     user_id = auth.uid()
     or public.is_household_member(household_id)
   );
+create policy household_members_delete_member on public.household_members
+  for delete to authenticated using (public.is_household_member(household_id));
 
 create policy expenses_select_member on public.expenses
   for select to authenticated using (public.is_household_member(household_id));
