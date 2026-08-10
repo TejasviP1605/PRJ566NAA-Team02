@@ -60,3 +60,6 @@ See `supabase/schema.sql` for your database report.
 ## AI Assistance Disclosure
 AI tools (GitHub Copilot) were used occasionally for code suggestions 
 during development.
+
+## Production deployment link 
+We are using vercel https://prj-566-naa-team02.vercel.app/login
