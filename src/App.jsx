@@ -6,10 +6,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Expenses from './pages/Expenses'
-import Maintenance from './pages/Maintenance'
-import Documents from './pages/Documents'
-import Activity from './pages/Activity'
-import Profile from './pages/Profile'
+import Profile from './pages/profile'
 
 export default function App() {
   return (
