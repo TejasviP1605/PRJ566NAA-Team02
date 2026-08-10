@@ -322,8 +322,12 @@ create policy household_members_update_own on public.household_members
   for update to authenticated
   using (
     user_id = auth.uid()
-    or user_id is null
     or public.is_household_member(household_id)
+    or (
+      user_id is null
+      and auth.jwt() ->> 'email' is not null
+      and lower(email) = lower(auth.jwt() ->> 'email')
+    )
   )
   with check (
     user_id = auth.uid()
