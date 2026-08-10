@@ -1080,6 +1080,149 @@ export function AppProvider({ children }) {
     return updateMaintenanceStatus(requestId, 'cancelled')
   }
 
+  const updateProfile = async ({ displayName, phone, address, addressDetails }) => {
+    if (!userId) return { ok: false, message: 'Please log in first.' }
+
+    const updates = {}
+    if (displayName !== undefined) updates.display_name = displayName.trim()
+    if (phone !== undefined) updates.phone = phone.trim()
+    if (address !== undefined) updates.address = address.trim()
+    if (addressDetails !== undefined) updates.address_details = addressDetails
+
+    if (!Object.keys(updates).length) return { ok: true }
+
+    const { error } = await supabase.from('profiles').update(updates).eq('id', userId)
+    if (error) return { ok: false, message: error.message }
+
+    if (activeHouseholdId) {
+      await logActivity({
+        activityType: 'profile_updated',
+        description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} updated their profile`,
+        relatedEntityType: 'profile',
+        relatedEntityId: userId,
+      })
+    }
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const changePassword = async (newPassword) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) return { ok: false, message: error.message }
+    return { ok: true }
+  }
+
+  const updateHousehold = async ({ name, unit, address }) => {
+    if (!activeHouseholdId) return { ok: false, message: 'No active household.' }
+
+    const { error } = await supabase
+      .from('households')
+      .update({
+        name: name.trim(),
+        unit: unit.trim() || 'Primary unit',
+        address: address.trim(),
+      })
+      .eq('id', activeHouseholdId)
+
+    if (error) return { ok: false, message: error.message }
+
+    await logActivity({
+      activityType: 'household_updated',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} updated household details`,
+      relatedEntityType: 'household',
+      relatedEntityId: activeHouseholdId,
+    })
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const deleteHousehold = async () => {
+    if (!activeHouseholdId || !household) {
+      return { ok: false, message: 'No household to delete.' }
+    }
+
+    const deletedId = activeHouseholdId
+    const deletedName = household.name
+
+    const { error } = await supabase.from('households').delete().eq('id', deletedId)
+    if (error) return { ok: false, message: error.message }
+
+    const remaining = households.filter((item) => item.id !== deletedId)
+    const nextId = remaining[0]?.id ?? null
+
+    await supabase.from('profiles').update({ active_household_id: nextId }).eq('id', userId)
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true, message: `Deleted household “${deletedName}”.` }
+  }
+
+  const updateMember = async (memberId, { name, email, phone }) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
+    const existing = members.find((member) => member.id === memberId)
+    if (!existing) return { ok: false, message: 'Member not found.' }
+
+    const cleanEmail = normalizeEmail(email)
+    const cleanPhone = phone.trim()
+    if (!cleanEmail && !cleanPhone) {
+      return { ok: false, message: 'Add either a phone number or email address.' }
+    }
+
+    const { error } = await supabase
+      .from('household_members')
+      .update({
+        name: name.trim(),
+        email: cleanEmail,
+        phone: cleanPhone,
+      })
+      .eq('id', memberId)
+
+    if (error) return { ok: false, message: error.message }
+
+    await logActivity({
+      activityType: 'member_updated',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} updated member “${name.trim()}”`,
+      relatedEntityType: 'member',
+      relatedEntityId: memberId,
+    })
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
+  const deleteMember = async (memberId) => {
+    if (!activeHouseholdId) {
+      return { ok: false, message: 'Create or select a household first.' }
+    }
+
+    const existing = members.find((member) => member.id === memberId)
+    if (!existing) return { ok: false, message: 'Member not found.' }
+
+    if (members.length <= 1) {
+      return { ok: false, message: 'Cannot remove the last member. Delete the household instead.' }
+    }
+
+    const { data, error } = await supabase.rpc('remove_household_member', {
+      p_member_id: memberId,
+    })
+
+    if (error) return { ok: false, message: error.message }
+    if (!data?.ok) return { ok: false, message: data?.message || 'Member was not deleted.' }
+
+    await logActivity({
+      activityType: 'member_removed',
+      description: `${currentMember?.name ?? currentUser?.name ?? 'Someone'} removed member “${existing.name}”`,
+      relatedEntityType: 'member',
+      relatedEntityId: memberId,
+    })
+
+    await refreshHouseholdData(userId, authUser)
+    return { ok: true }
+  }
+
   const value = {
     loading: !authReady || (Boolean(userId) && dataLoading),
     isConfigured: isSupabaseConfigured,
@@ -1103,12 +1246,19 @@ export function AppProvider({ children }) {
     hasActiveHousehold: Boolean(household),
     isAuthenticated: Boolean(session?.user),
     profileReady: Boolean(profile),
+    profile,
     login,
     register,
     logout,
     setActiveHousehold,
     createHousehold,
     addMember,
+    updateMember,
+    deleteMember,
+    updateProfile,
+    changePassword,
+    updateHousehold,
+    deleteHousehold,
     addExpense,
     updateExpense,
     markMySharePaid,
