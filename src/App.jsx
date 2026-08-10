@@ -9,6 +9,7 @@ import Expenses from './pages/Expenses'
 import Maintenance from './pages/Maintenance'
 import Documents from './pages/Documents'
 import Activity from './pages/Activity'
+import Profile from './pages/Profile'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
               <Route path="maintenance" element={<Maintenance />} />
               <Route path="documents" element={<Documents />} />
               <Route path="activity" element={<Activity />} />
+              <Route path="profile" element={<Profile />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/login" replace />} />
