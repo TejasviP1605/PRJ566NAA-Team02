@@ -1,65 +1,63 @@
 # RentRight
 
-Shared rental management. **Login, profiles, households, and members** are stored in Supabase (Auth + Postgres).
+**Team 1** — shared rental management for roommates.
+
+Login, profiles, households, expenses, documents, maintenance, and activity history are stored in **Supabase** (Auth + PostgreSQL + Storage). The UI is a React app hosted on **Vercel**.
+
+**Live site:** https://prj-566-naa-team02.vercel.app/login
 
 ---
 
-## Tech Stack
+## Project documents
 
-- **Frontend:** React 18 + Vite + Tailwind CSS
-- **Backend:** [Supabase](https://supabase.com) — Auth + PostgreSQL
+| Document | Contents |
+|----------|----------|
+| [Technical document](docs/TECHNICAL.md) | Architecture, stack, database, security |
+| [Installation instructions](docs/INSTALLATION.md) | How to run locally |
+| [Public server](docs/PUBLIC-SERVER.md) | Live URL, deploy notes, **test account usernames and passwords** |
 
 ---
 
-## Setup
+## Quick start (local)
 
 ```bash
+git clone https://github.com/TejasviP1605/PRJ566NAA-Team02.git
+cd PRJ566NAA-Team02
 npm install
 cp .env.example .env
 ```
 
-Add **Project URL** and **publishable key** from Supabase → Project Settings → API.
-
-1. Run **`supabase/schema.sql`** in Supabase → SQL Editor.
-2. **Authentication → Providers → Email** → turn **off** “Confirm email” (see comments at top of `supabase/schema.sql`).
+Add your Supabase URL and publishable key to `.env`, run `supabase/schema.sql` in the SQL Editor, then:
 
 ```bash
 npm run dev
 ```
 
-Open http://localhost:3000 → **Register** → create households on the Dashboard.
+Open http://localhost:3000
+
+Full steps: [docs/INSTALLATION.md](docs/INSTALLATION.md)
 
 ---
 
-## Architecture
+## Test accounts (public site)
 
-```
-Register / Login  →  Supabase Auth (auth.users)
-                 →  profiles (same id as auth user)
+| Username | Password |
+|----------|----------|
+| `leaseholder@rentright.test` | `RentRight123` |
+| `roommate@rentright.test` | `RentRight123` |
 
-Dashboard       →  households, household_members in Supabase
-```
+Details: [docs/PUBLIC-SERVER.md](docs/PUBLIC-SERVER.md)
+
+---
+
+## Tech stack
+
+- **Frontend:** React 18 + Vite + Tailwind CSS
+- **Backend:** [Supabase](https://supabase.com) — Auth + PostgreSQL + Storage
+- **Hosting:** Vercel
 
 ---
 
-## Tables
+## AI assistance disclosure
 
-| Table | Purpose |
-|-------|---------|
-| `profiles` | User id, name, email, active household |
-| `households` | Property name, unit, address |
-| `household_members` | People per household |
-| `expenses` | Shared costs per household |
-| `documents` | File metadata (files in Storage bucket `household-documents`) |
-
-Open `supabase/schema.sql`, copy all SQL, paste into Supabase SQL Editor, and run. If the database already exists, run only from `-- Expense split type` through the end.
-
-See `supabase/schema.sql` for your database report.
-
----
-## AI Assistance Disclosure
-AI tools (GitHub Copilot) were used occasionally for code suggestions 
-during development.
-
-## Production deployment link 
-We are using vercel https://prj-566-naa-team02.vercel.app/login
+AI tools (GitHub Copilot / Cursor) were used occasionally for code suggestions during development.
