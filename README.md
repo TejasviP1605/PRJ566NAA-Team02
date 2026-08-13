@@ -60,4 +60,4 @@ Details: [docs/PUBLIC-SERVER.md](docs/PUBLIC-SERVER.md)
 
 ## AI assistance disclosure
 
-AI tools (GitHub Copilot / Cursor) were used occasionally for code suggestions during development.
+AI tools (GitHub Copilot) were used occasionally for code suggestions during development.
